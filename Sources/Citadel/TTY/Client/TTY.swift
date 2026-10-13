@@ -264,6 +264,7 @@ extension SSHClient {
 
     enum CommandMode {
         case pty(SSHChannelRequestEvent.PseudoTerminalRequest), tty(command: String?), command(String)
+        case ptyCommand(SSHChannelRequestEvent.PseudoTerminalRequest, String)
     }
 
     internal func _executeCommandStream(
@@ -335,9 +336,39 @@ extension SSHClient {
                 command: command,
                 wantReply: true
             ))
+        case .ptyCommand(let request, let command):
+            try await channel.triggerUserOutboundEvent(request)
+            try await channel.triggerUserOutboundEvent(SSHChannelRequestEvent.ExecRequest(
+                command: command,
+                wantReply: true
+            ))
         }
-        
+
         return (channel, stream)
+    }
+
+    /// Like `withPTY(_:environment:perform:)`, but runs `command` on the
+    /// pseudo-terminal (an exec request, as `ssh -t host command` does)
+    /// instead of the user's login shell.
+    @available(macOS 15.0, *)
+    public func withPTY(
+        _ request: SSHChannelRequestEvent.PseudoTerminalRequest,
+        command: String,
+        environment: [SSHChannelRequestEvent.EnvironmentRequest] = [],
+        perform: (_ inbound: TTYOutput, _ outbound: TTYStdinWriter) async throws -> Void
+    ) async throws {
+        let (channel, output) = try await _executeCommandStream(
+            environment: environment,
+            mode: .ptyCommand(request, command)
+        )
+
+        do {
+            try await perform(TTYOutput(sequence: output), TTYStdinWriter(channel: channel))
+            try await channel.close()
+        } catch {
+            try? await channel.close()
+            throw error
+        }
     }
 
     /// Creates a pseudo-terminal (PTY) session and executes the provided closure with input/output streams
