@@ -236,6 +236,37 @@ final class SSHClientSession: Sendable {
         }.get()
     }
     
+    /// Creates a new SSH session on a channel made by `bootstrap`, e.g. a
+    /// `NIOTSConnectionBootstrap` (Network.framework). `prehandlers` go
+    /// ahead of SSH in each new channel's pipeline, so they see its events
+    /// (connection viability, path changes) first.
+    static func connect(
+        settings: SSHClientSettings,
+        bootstrap: some NIOClientTCPBootstrapProtocol,
+        prehandlers: @escaping @Sendable () -> [ChannelHandler & Sendable]
+    ) async throws -> SSHClientSession {
+        let inboundChannelHandler = SSHClientInboundChannelHandler()
+        let bootstrap = bootstrap.channelInitializer { channel in
+            do {
+                try channel.pipeline.syncOperations.addHandlers(prehandlers())
+            } catch {
+                return channel.eventLoop.makeFailedFuture(error)
+            }
+            return Self.addHandlers(on: channel, inboundChannelHandler: inboundChannelHandler, settings: settings)
+        }
+        .connectTimeout(settings.connectTimeout)
+
+        return try await bootstrap.connect(host: settings.host, port: settings.port).flatMap { channel in
+            channel.pipeline.handler(type: ClientHandshakeHandler.self).flatMap { handshakeHandler in
+                handshakeHandler.authenticated
+            }.flatMap {
+                channel.pipeline.handler(type: NIOSSHHandler.self)
+            }.map { sshHandler in
+                SSHClientSession(channel: channel, inboundChannelHandler: inboundChannelHandler, sshHandler: sshHandler)
+            }
+        }.get()
+    }
+
     /// Creates a new SSH session on a new channel. This will connect to the given host and port.
     /// - Parameters:
     ///  - host: The host to connect to.

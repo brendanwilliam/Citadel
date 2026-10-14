@@ -148,6 +148,32 @@ public final class SSHClient {
         self.onDisconnect = onDisconnect
     }
 
+    /// Connects to an SSH server over a channel made by `bootstrap`, such
+    /// as a `NIOTSConnectionBootstrap` for Network.framework. `settings.group`
+    /// is unused; the bootstrap has its own.
+    /// - settings: The settings to use for the connection.
+    /// - bootstrap: Makes the TCP connection.
+    /// - prehandlers: Handlers placed ahead of SSH in the channel's pipeline.
+    /// - Returns: An SSH client.
+    public static func connect(
+        to settings: SSHClientSettings,
+        bootstrap: some NIOClientTCPBootstrapProtocol,
+        prehandlers: @escaping @Sendable () -> [ChannelHandler & Sendable] = { [] }
+    ) async throws -> SSHClient {
+        let session = try await SSHClientSession.connect(
+            settings: settings,
+            bootstrap: bootstrap,
+            prehandlers: prehandlers)
+
+        return SSHClient(
+            session: session,
+            authenticationMethod: settings.authenticationMethod(),
+            hostKeyValidator: settings.hostKeyValidator,
+            algorithms: settings.algorithms,
+            protocolOptions: settings.protocolOptions
+        )
+    }
+
     /// Connects to an SSH server.
     /// - settings: The settings to use for the connection.
     /// - Returns: An SSH client.
